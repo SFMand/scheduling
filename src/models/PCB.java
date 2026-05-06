@@ -13,6 +13,7 @@ public class PCB {
   private int memoryRequired;
   private int waitingTime;
   private int turnaroundTime;
+  private int remainingBurst;
 
   public PCB(int processId, int cpuBurstTime, int priority, int memoryRequired) {
     this.processId = processId;
@@ -23,6 +24,7 @@ public class PCB {
     this.state = State.NEW;
     this.waitingTime = 0;
     this.turnaroundTime = 0;
+    this.remainingBurst = cpuBurstTime;
   }
 
   public int getProcessId() {
@@ -79,6 +81,14 @@ public class PCB {
 
   public void setTurnaroundTime(int turnaroundTime) {
     this.turnaroundTime = turnaroundTime;
+  }
+
+  public int getRemainingBurst() {
+    return remainingBurst;
+  }
+
+  public void setRemainingBurst(int remainingBurst) {
+    this.remainingBurst = remainingBurst;
   }
 
   @Override
