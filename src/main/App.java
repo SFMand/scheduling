@@ -13,36 +13,44 @@ import src.models.PCB;
 
 public class App {
   private static final Scanner SCANNER = new Scanner(System.in);
-  private static final int MAIN_MEMORY_MB = 2048;
-  private static final int CONTEXT_SWITCH_TIME_MS = 0;
   private static final int RR_TIME_QUANTUM_MS = 5;
 
   public static void main(String[] args) {
     Queue<PCB> jobQueue = new ArrayDeque<>();
     Queue<PCB> readyQueue = new ArrayDeque<>();
 
-    Thread jobReaderThread = new Thread(new JobReader(), "JobReader"); // Thread 1
+    JobReader task1 = new JobReader("job.txt", jobQueue);
+    Thread jobReaderThread = new Thread(task1, "JobReader"); // Thread 1
     jobReaderThread.start();
 
-    Thread jobLoaderThread = new Thread(new JobLoader(), "JobLoader"); // Thread 2
+    JobLoader task2 = new JobLoader(jobQueue, readyQueue, task1);
+    Thread jobLoaderThread = new Thread(task2, "JobLoader"); // Thread 2
     jobLoaderThread.start();
+
+    try {
+      jobReaderThread.join();
+      task2.setAllProcessesDone(true);
+      jobLoaderThread.join();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      System.out.println("Interrupted");
+    }
 
     int choice = askUser();
     List<GanttSlice> executionOrder;
-
     switch (choice) {
       case 1:
-        executionOrder = shortestJobFirst(jobQueue, readyQueue);
+        executionOrder = shortestJobFirst(readyQueue);
         break;
       case 2:
-        executionOrder = roundRobin(jobQueue, readyQueue);
+        executionOrder = roundRobin(readyQueue);
         break;
       case 3:
-        executionOrder = priorityNonPreemptive(jobQueue, readyQueue);
+        executionOrder = priorityNonPreemptive(readyQueue);
         break;
       default:
         System.out.println("Invalid choice. Defaulting to Shortest Job First.");
-        executionOrder = shortestJobFirst(jobQueue, readyQueue);
+        executionOrder = shortestJobFirst(readyQueue);
         break;
     }
 
@@ -65,7 +73,7 @@ public class App {
     return choice;
   }
 
-  private static List<GanttSlice> shortestJobFirst(Queue<PCB> jobQueue, Queue<PCB> readyQueue) {
+  private static List<GanttSlice> shortestJobFirst(Queue<PCB> readyQueue) {
     System.out.println("Running Shortest Job First scheduling");
 
     List<PCB> ordered = new ArrayList<>();
@@ -87,7 +95,7 @@ public class App {
     return slices;
   }
 
-  private static List<GanttSlice> roundRobin(Queue<PCB> jobQueue, Queue<PCB> readyQueue) {
+  private static List<GanttSlice> roundRobin(Queue<PCB> readyQueue) {
     System.out.println("Running Round Robin scheduling");
 
     List<GanttSlice> slices = new ArrayList<>();
@@ -118,9 +126,32 @@ public class App {
     return slices;
   }
 
-  private static List<GanttSlice> priorityNonPreemptive(Queue<PCB> jobQueue, Queue<PCB> readyQueue) {
+  private static List<GanttSlice> priorityNonPreemptive(Queue<PCB> readyQueue) {
     System.out.println("Running Priority (Non-Preemptive) scheduling");
-    return new ArrayList<>();
+
+    List<PCB> ordered = new ArrayList<>();
+    while (!readyQueue.isEmpty()) {
+      ordered.add(readyQueue.poll());
+    }
+    ordered.sort((left, right) -> {
+      int priorityCompare = Integer.compare(left.getPriority(), right.getPriority());
+      if (priorityCompare != 0) {
+        return priorityCompare;
+      }
+      return Integer.compare(left.getCpuBurstTime(), right.getCpuBurstTime());
+    });
+
+    List<GanttSlice> slices = new ArrayList<>();
+    int currentTime = 0;
+    for (PCB pcb : ordered) {
+      int burst = pcb.getCpuBurstTime();
+      int startTime = currentTime;
+      int endTime = currentTime + burst;
+      slices.add(new GanttSlice(pcb.getProcessId(), startTime, endTime, burst, 0));
+      currentTime = endTime;
+    }
+
+    return slices;
   }
 
   private static void printGanttChart(List<GanttSlice> executionOrder) {
