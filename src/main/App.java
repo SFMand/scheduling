@@ -8,6 +8,8 @@ import java.util.Scanner;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Arrays;
+import java.util.Set;
+import java.util.HashSet;
 
 import src.models.GanttSlice;
 import src.models.JobLoader;
@@ -17,6 +19,9 @@ import src.models.PCB;
 public class App {
   private static final Scanner SCANNER = new Scanner(System.in);
   private static final int RR_TIME_QUANTUM_MS = 5;
+  private static final int PRIORITY_AGING_INTERVAL_MS = 4;
+  private static final int PRIORITY_STARVATION_UNIT_MS = 5;
+  private static final int PRIORITY_MIN_LEVEL = 1;
 
   public static void main(String[] args) {
     Queue<PCB> jobQueue = new ArrayDeque<>();
@@ -33,7 +38,6 @@ public class App {
     try {
       jobReaderThread.join();
       task2.setAllProcessesDone(true);
-      jobLoaderThread.join();
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       System.out.println("Interrupted");
@@ -133,30 +137,92 @@ public class App {
   private static List<GanttSlice> priorityNonPreemptive(Queue<PCB> readyQueue) {
     System.out.println("Running Priority (Non-Preemptive) scheduling");
 
-    List<PCB> ordered = new ArrayList<>();
+    List<PCB> waiting = new ArrayList<>();
     while (!readyQueue.isEmpty()) {
-      ordered.add(readyQueue.poll());
+      waiting.add(readyQueue.poll());
     }
-    // sort PCB by priority ascending, tie break: by burst time ascending
-    ordered.sort((left, right) -> {
-      int priorityCompare = Integer.compare(left.getPriority(), right.getPriority());
-      if (priorityCompare != 0) {
-        return priorityCompare;
-      }
-      return Integer.compare(left.getCpuBurstTime(), right.getCpuBurstTime());
-    });
 
     List<GanttSlice> slices = new ArrayList<>();
+    Set<Integer> starvedProcessesReported = new HashSet<>();
     int currentTime = 0;
-    for (PCB pcb : ordered) {
-      int burst = pcb.getCpuBurstTime();
-      int startTime = currentTime;
-      int endTime = currentTime + burst;
+
+    while (!waiting.isEmpty()) {
+      reportStarvedProcesses(waiting, starvedProcessesReported);
+
+      PCB pcb = selectNextPriorityProcess(waiting);
+      int burst = pcb.getCpuBurstTime(); // 13
+      int startTime = currentTime; // 0
+      int endTime = currentTime + burst; // 0 + 13 = 13
       slices.add(new GanttSlice(pcb.getProcessId(), startTime, endTime, burst, 0));
-      currentTime = endTime;
+      pcb.setWaitingTime(startTime); // 0
+      currentTime = endTime; // 13
+
+      if (!waiting.isEmpty()) {
+        int agingRounds = burst / PRIORITY_AGING_INTERVAL_MS;
+        if (agingRounds > 0) {
+          ageWaitingProcesses(waiting, agingRounds);
+        }
+        updateWaitingTimes(waiting, burst);
+        reportStarvedProcesses(waiting, starvedProcessesReported);
+      }
     }
 
     return slices;
+  }
+
+  private static PCB selectNextPriorityProcess(List<PCB> waiting) {
+    PCB selected = waiting.get(0);
+    for (PCB pcb : waiting) {
+      int priorityCompare = Integer.compare(pcb.getPriority(), selected.getPriority());
+      if (priorityCompare < 0) {
+        selected = pcb;
+        continue;
+      }
+      if (priorityCompare == 0) {
+        int burstCompare = Integer.compare(pcb.getCpuBurstTime(), selected.getCpuBurstTime());
+        if (burstCompare < 0 || (burstCompare == 0 && pcb.getProcessId() < selected.getProcessId())) {
+          selected = pcb;
+        }
+      }
+    }
+
+    waiting.remove(selected);
+    return selected;
+  }
+
+  private static void ageWaitingProcesses(List<PCB> waiting, int agingRounds) {
+    for (int round = 0; round < agingRounds; round++) {
+      for (PCB pcb : waiting) {
+        pcb.setPriority(Math.max(PRIORITY_MIN_LEVEL, pcb.getPriority() - 1));
+      }
+    }
+
+    if (agingRounds > 0) {
+      System.out.printf("Aging applied: waiting processes improved after %d ms of CPU time.%n",
+          agingRounds * PRIORITY_AGING_INTERVAL_MS);
+    }
+  }
+
+  private static void updateWaitingTimes(List<PCB> waiting, int elapsedTime) {
+    for (PCB pcb : waiting) {
+      pcb.setWaitingTime(pcb.getWaitingTime() + elapsedTime);
+    }
+  }
+
+  private static void reportStarvedProcesses(List<PCB> waiting, Set<Integer> starvedProcessesReported) {
+    if (waiting.isEmpty()) {
+      return;
+    }
+
+    int readyQueueSize = waiting.size();
+    int starvationThreshold = readyQueueSize * PRIORITY_STARVATION_UNIT_MS;
+    for (PCB pcb : waiting) {
+      if (pcb.getWaitingTime() > starvationThreshold && starvedProcessesReported.add(pcb.getProcessId())) {
+        System.out.printf(
+            "Starvation detected: P%d waited %d ms with %d process(es) in the ready queue.%n",
+            pcb.getProcessId(), pcb.getWaitingTime(), readyQueueSize);
+      }
+    }
   }
 
   private static void printGanttChart(List<GanttSlice> executionOrder) {
@@ -192,24 +258,26 @@ public class App {
 
     System.out.println("Gantt chart:");
 
+    final String timelinePrefix = "Time  : ";
+
     StringBuilder ruler = new StringBuilder();
-    ruler.append("Time  : ");
+    ruler.append(timelinePrefix);
     for (int c = 0; c < width; c++) {
       ruler.append((c % 5 == 0) ? '|' : '-');
     }
     System.out.println(ruler.toString());
 
     StringBuilder labels = new StringBuilder();
-    labels.append("       ");
+    labels.append(timelinePrefix);
     for (int pos = 0; pos < width; pos += 5) {
       int time = (int) Math.round(pos / scale);
-      labels.append(String.format("%5d", time));
+      labels.append(String.format("%-5d", time));
     }
     System.out.println(labels.toString());
 
     for (int pid = 1; pid <= maxPid; pid++) {
       StringBuilder line = new StringBuilder();
-      line.append(String.format("P%-3d: ", pid));
+      line.append(String.format("P%-3d  : ", pid));
       line.append(new String(lanes.get(pid)));
       System.out.println(line.toString());
     }
