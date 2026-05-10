@@ -5,6 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 import java.util.Scanner;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Arrays;
 
 import src.models.GanttSlice;
 import src.models.JobLoader;
@@ -80,6 +83,7 @@ public class App {
     while (!readyQueue.isEmpty()) {
       ordered.add(readyQueue.poll());
     }
+    // sort PCB by burst time ascending
     ordered.sort((left, right) -> Integer.compare(left.getCpuBurstTime(), right.getCpuBurstTime()));
 
     List<GanttSlice> slices = new ArrayList<>();
@@ -133,6 +137,7 @@ public class App {
     while (!readyQueue.isEmpty()) {
       ordered.add(readyQueue.poll());
     }
+    // sort PCB by priority ascending, tie break: by burst time ascending
     ordered.sort((left, right) -> {
       int priorityCompare = Integer.compare(left.getPriority(), right.getPriority());
       if (priorityCompare != 0) {
@@ -155,15 +160,58 @@ public class App {
   }
 
   private static void printGanttChart(List<GanttSlice> executionOrder) {
-    if (executionOrder.isEmpty()) {
-      System.out.println("Gantt chart output goes here.");
-      return;
+    int totalTime = 0;
+    int maxPid = 0;
+    for (GanttSlice s : executionOrder) {
+      totalTime = Math.max(totalTime, s.getEndTime());
+      maxPid = Math.max(maxPid, s.getProcessId());
     }
 
-    System.out.println("Gantt chart (PID | start-end | burst start->end):");
-    for (GanttSlice slice : executionOrder) {
-      System.out.printf("P%d | %d-%d | %d->%d%n", slice.getProcessId(), slice.getStartTime(),
-          slice.getEndTime(), slice.getStartBurst(), slice.getEndBurst());
+    int width = Math.min(Math.max(totalTime, 1), 60);
+    double scale = totalTime > width ? (double) width / totalTime : 1.0;
+
+    Map<Integer, char[]> lanes = new HashMap<>();
+    for (int pid = 1; pid <= maxPid; pid++) {
+      char[] lane = new char[width];
+      Arrays.fill(lane, ' ');
+      lanes.put(pid, lane);
+    }
+
+    for (GanttSlice s : executionOrder) {
+      int pid = s.getProcessId();
+      int startCol = (int) Math.round(s.getStartTime() * scale);
+      int endCol = (int) Math.round(s.getEndTime() * scale);
+      if (endCol <= startCol) {
+        endCol = startCol + 1;
+      }
+      char[] lane = lanes.get(pid);
+      for (int c = startCol; c < endCol && c < width; c++) {
+        lane[c] = '=';
+      }
+    }
+
+    System.out.println("Gantt chart:");
+
+    StringBuilder ruler = new StringBuilder();
+    ruler.append("Time  : ");
+    for (int c = 0; c < width; c++) {
+      ruler.append((c % 5 == 0) ? '|' : '-');
+    }
+    System.out.println(ruler.toString());
+
+    StringBuilder labels = new StringBuilder();
+    labels.append("       ");
+    for (int pos = 0; pos < width; pos += 5) {
+      int time = (int) Math.round(pos / scale);
+      labels.append(String.format("%5d", time));
+    }
+    System.out.println(labels.toString());
+
+    for (int pid = 1; pid <= maxPid; pid++) {
+      StringBuilder line = new StringBuilder();
+      line.append(String.format("P%-3d: ", pid));
+      line.append(new String(lanes.get(pid)));
+      System.out.println(line.toString());
     }
   }
 }
