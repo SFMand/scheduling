@@ -5,8 +5,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 import java.util.Scanner;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.HashSet;
@@ -326,14 +324,25 @@ public class App {
       maxPid = Math.max(maxPid, s.getProcessId());
     }
 
+    int[] totalBurstByPid = new int[maxPid + 1];
+    int[] completionTimeByPid = new int[maxPid + 1];
+    boolean[] seenPid = new boolean[maxPid + 1];
+    for (GanttSlice s : executionOrder) {
+      int pid = s.getProcessId();
+      int duration = s.getEndTime() - s.getStartTime();
+      totalBurstByPid[pid] += duration;
+      if (s.getEndTime() > completionTimeByPid[pid]) {
+        completionTimeByPid[pid] = s.getEndTime();
+      }
+      seenPid[pid] = true;
+    }
+
     int width = Math.min(Math.max(totalTime, 1), 60);
     double scale = totalTime > width ? (double) width / totalTime : 1.0;
 
-    Map<Integer, char[]> lanes = new HashMap<>();
+    char[][] lanes = new char[maxPid + 1][width];
     for (int pid = 1; pid <= maxPid; pid++) {
-      char[] lane = new char[width];
-      Arrays.fill(lane, ' ');
-      lanes.put(pid, lane);
+      Arrays.fill(lanes[pid], ' ');
     }
 
     for (GanttSlice s : executionOrder) {
@@ -343,9 +352,8 @@ public class App {
       if (endCol <= startCol) {
         endCol = startCol + 1;
       }
-      char[] lane = lanes.get(pid);
       for (int c = startCol; c < endCol && c < width; c++) {
-        lane[c] = '=';
+        lanes[pid][c] = '=';
       }
     }
 
@@ -371,8 +379,34 @@ public class App {
     for (int pid = 1; pid <= maxPid; pid++) {
       StringBuilder line = new StringBuilder();
       line.append(String.format("P%-3d  : ", pid));
-      line.append(new String(lanes.get(pid)));
+      line.append(new String(lanes[pid]));
       System.out.println(line.toString());
+    }
+
+    int processCount = 0;
+    for (int pid = 1; pid <= maxPid; pid++) {
+      if (seenPid[pid]) {
+        processCount++;
+      }
+    }
+
+    if (processCount > 0) {
+      double totalTurnaround = 0;
+      double totalWaiting = 0;
+      for (int pid = 1; pid <= maxPid; pid++) {
+        if (!seenPid[pid]) {
+          continue;
+        }
+        int turnaround = completionTimeByPid[pid];
+        int waiting = Math.max(0, turnaround - totalBurstByPid[pid]);
+        totalTurnaround += turnaround;
+        totalWaiting += waiting;
+      }
+
+      double avgTurnaround = totalTurnaround / processCount;
+      double avgWaiting = totalWaiting / processCount;
+      System.out.printf("Average turnaround time: %.2f ms%n", avgTurnaround);
+      System.out.printf("Average waiting time: %.2f ms%n", avgWaiting);
     }
   }
 }

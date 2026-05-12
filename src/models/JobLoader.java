@@ -39,6 +39,14 @@ public class JobLoader implements Runnable {
           synchronized (jobQueue) {
             if (!jobQueue.isEmpty()) {
               nextJob = jobQueue.peek();
+              if (nextJob.getMemoryRequired() > TOTAL_MEMORY_MB) {
+                jobQueue.poll();
+                System.out.printf(
+                    "\nSkipping P%d: requires %dMB, exceeds total memory %dMB.%n",
+                    nextJob.getProcessId(), nextJob.getMemoryRequired(), TOTAL_MEMORY_MB);
+                nextJob = null;
+                continue;
+              }
               break;
             }
           }
