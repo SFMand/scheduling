@@ -34,43 +34,47 @@ public class JobLoader implements Runnable {
       while (true) {
         PCB nextJob = null;
 
-        // peek at next job safely to make sure no 2 threads enter at the same time
-        synchronized (jobQueue) {
-          if (!jobQueue.isEmpty()) {
-            nextJob = jobQueue.peek();
+        // Wait until there's a job available in the queue
+        while (nextJob == null) {
+          synchronized (jobQueue) {
+            if (!jobQueue.isEmpty()) {
+              nextJob = jobQueue.peek();
+              break;
+            }
           }
-        }
 
-        // if no job is available, check for termination or sleep briefly
-        if (nextJob == null) {
+          // No job available - check termination or sleep
           if (jobReader.isFinished() && allProcessesDone) {
-            break; // all jobs have loaded and finished so we terminate thread 2
+            return; // All jobs loaded and processed
           }
-          Thread.sleep(50); // prevent busy-waiting while Thread 1 loads files
-          continue;
+
+          Thread.sleep(50); // Brief sleep to prevent busy-waiting
         }
 
-        // we wait until there is enough memory available for the next job
+        // Wait for sufficient memory to load this job, then allocate and add to ready
+        // queue
+        // This entire operation must be atomic to prevent jobs from appearing out of
+        // order
         synchronized (this) {
           while (nextJob.getMemoryRequired() > availableMemory) {
-            wait(); // thread pauses here until releaseMemory() is called (it invokes notifyAll())
+            wait(); // Pause until memory becomes available via releaseMemory()
           }
 
-          // safely remove the job from the job queue and allocate memory ensuring only 1
-          // thread enters
+          // Memory is now available - allocate it and remove from job queue
           synchronized (jobQueue) {
-            // double check the job is still there because of the time gap resulting from
-            // wait()
+            // Safe to poll since we're the only thread that removes from jobQueue
             if (!jobQueue.isEmpty() && jobQueue.peek() == nextJob) {
               jobQueue.poll();
               availableMemory -= nextJob.getMemoryRequired();
             } else {
+              // Queue was cleared or modified unexpectedly - restart the loop
+              nextJob = null;
               continue;
             }
           }
         }
 
-        // safely add the job to the ready queue
+        // Job is now allocated in memory - add to ready queue for scheduler
         nextJob.setState(PCB.State.READY);
         synchronized (readyQueue) {
           readyQueue.offer(nextJob);

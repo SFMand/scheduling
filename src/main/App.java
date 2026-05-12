@@ -26,12 +26,13 @@ public class App {
   public static void main(String[] args) {
     Queue<PCB> jobQueue = new ArrayDeque<>();
     Queue<PCB> readyQueue = new ArrayDeque<>();
-
     JobReader task1 = new JobReader("job.txt", jobQueue);
-    Thread jobReaderThread = new Thread(task1, "JobReader"); // Thread 1
-    jobReaderThread.start();
 
+    Thread jobReaderThread = new Thread(task1, "JobReader"); // Thread 1
+
+    jobReaderThread.start();
     JobLoader task2 = new JobLoader(jobQueue, readyQueue, task1);
+
     Thread jobLoaderThread = new Thread(task2, "JobLoader"); // Thread 2
     jobLoaderThread.start();
 
@@ -47,17 +48,17 @@ public class App {
     List<GanttSlice> executionOrder;
     switch (choice) {
       case 1:
-        executionOrder = shortestJobFirst(readyQueue);
+        executionOrder = shortestJobFirst(readyQueue, task2, jobLoaderThread);
         break;
       case 2:
-        executionOrder = roundRobin(readyQueue);
+        executionOrder = roundRobin(readyQueue, task2, jobLoaderThread);
         break;
       case 3:
-        executionOrder = priorityNonPreemptive(readyQueue);
+        executionOrder = priorityNonPreemptive(readyQueue, task2, jobLoaderThread);
         break;
       default:
         System.out.println("Invalid choice. Defaulting to Shortest Job First.");
-        executionOrder = shortestJobFirst(readyQueue);
+        executionOrder = shortestJobFirst(readyQueue, task2, jobLoaderThread);
         break;
     }
 
@@ -80,41 +81,83 @@ public class App {
     return choice;
   }
 
-  private static List<GanttSlice> shortestJobFirst(Queue<PCB> readyQueue) {
+  private static List<GanttSlice> shortestJobFirst(Queue<PCB> readyQueue, JobLoader jobLoader, Thread jobLoaderThread) {
     System.out.println("Running Shortest Job First scheduling");
 
     List<PCB> ordered = new ArrayList<>();
-    while (!readyQueue.isEmpty()) {
-      ordered.add(readyQueue.poll());
-    }
-    // sort PCB by burst time ascending
-    ordered.sort((left, right) -> Integer.compare(left.getCpuBurstTime(), right.getCpuBurstTime()));
-
     List<GanttSlice> slices = new ArrayList<>();
     int currentTime = 0;
-    for (PCB pcb : ordered) {
+
+    while (true) {
+      // 1. Fetch newly arrived jobs from the readyQueue
+      while (!readyQueue.isEmpty()) {
+        ordered.add(readyQueue.poll());
+      }
+
+      // 2. Check for termination
+      if (ordered.isEmpty()) {
+        if (!jobLoaderThread.isAlive())
+          break; // No more jobs will arrive
+        try {
+          Thread.sleep(50);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        continue;
+      }
+
+      // sort PCB by burst time ascending
+      ordered.sort((left, right) -> Integer.compare(left.getCpuBurstTime(), right.getCpuBurstTime()));
+
+      PCB pcb = ordered.remove(0);
       int burst = pcb.getCpuBurstTime();
       int startTime = currentTime;
       int endTime = currentTime + burst;
       slices.add(new GanttSlice(pcb.getProcessId(), startTime, endTime, burst, 0));
       currentTime = endTime;
+
+      // 3. Process is fully done, release memory!
+      jobLoader.releaseMemory(pcb.getMemoryRequired());
+
+      try {
+        Thread.sleep(50); // brief pause to allow JobLoader to load new jobs if possible
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
 
     return slices;
   }
 
-  private static List<GanttSlice> roundRobin(Queue<PCB> readyQueue) {
+  private static List<GanttSlice> roundRobin(Queue<PCB> readyQueue, JobLoader jobLoader, Thread jobLoaderThread) {
     System.out.println("Running Round Robin scheduling");
 
     List<GanttSlice> slices = new ArrayList<>();
     int currentTime = 0;
+    Queue<PCB> rrQueue = new ArrayDeque<>();
 
-    while (!readyQueue.isEmpty()) {
-      PCB pcb = readyQueue.poll();
-      int remaining = pcb.getRemainingBurst();
-      if (remaining <= 0) {
+    while (true) {
+      // 1. Dynamically load new jobs into the RR queue
+      while (!readyQueue.isEmpty()) {
+        rrQueue.offer(readyQueue.poll());
+      }
+
+      // 2. Check for termination
+      if (rrQueue.isEmpty()) {
+        if (!jobLoaderThread.isAlive())
+          break;
+        try {
+          Thread.sleep(50);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
         continue;
       }
+
+      PCB pcb = rrQueue.poll();
+      int remaining = pcb.getRemainingBurst();
+      if (remaining <= 0)
+        continue;
 
       int slice = Math.min(remaining, RR_TIME_QUANTUM_MS);
       int startTime = currentTime;
@@ -126,36 +169,86 @@ public class App {
       currentTime = endTime;
       pcb.setRemainingBurst(endBurst);
 
+      // Fetch newly loaded jobs before re-adding the current one
+      while (!readyQueue.isEmpty()) {
+        rrQueue.offer(readyQueue.poll());
+      }
+
       if (endBurst > 0) {
-        readyQueue.offer(pcb);
+        rrQueue.offer(pcb);
+      } else {
+        // 3. Process is fully done, release memory!
+        jobLoader.releaseMemory(pcb.getMemoryRequired());
+        try {
+          Thread.sleep(50); // brief pause to allow JobLoader to load new jobs if possible
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
       }
     }
 
     return slices;
   }
 
-  private static List<GanttSlice> priorityNonPreemptive(Queue<PCB> readyQueue) {
+  private static List<GanttSlice> priorityNonPreemptive(Queue<PCB> readyQueue, JobLoader jobLoader,
+      Thread jobLoaderThread) {
     System.out.println("Running Priority (Non-Preemptive) scheduling");
 
     List<PCB> waiting = new ArrayList<>();
-    while (!readyQueue.isEmpty()) {
-      waiting.add(readyQueue.poll());
-    }
-
     List<GanttSlice> slices = new ArrayList<>();
     Set<Integer> starvedProcessesReported = new HashSet<>();
     int currentTime = 0;
 
-    while (!waiting.isEmpty()) {
+    while (true) {
+      while (!readyQueue.isEmpty()) {
+        waiting.add(readyQueue.poll());
+      }
+
+      if (jobLoaderThread.isAlive()) {
+        try {
+          Thread.sleep(50);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        while (!readyQueue.isEmpty()) {
+          waiting.add(readyQueue.poll());
+        }
+      }
+
+      if (waiting.isEmpty()) {
+        if (!jobLoaderThread.isAlive())
+          break; // No more jobs will arrive
+        try {
+          Thread.sleep(50);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        continue;
+      }
+
       reportStarvedProcesses(waiting, starvedProcessesReported);
 
       PCB pcb = selectNextPriorityProcess(waiting);
-      int burst = pcb.getCpuBurstTime(); // 13
-      int startTime = currentTime; // 0
-      int endTime = currentTime + burst; // 0 + 13 = 13
+      int burst = pcb.getCpuBurstTime();
+      int startTime = currentTime;
+      int endTime = currentTime + burst;
       slices.add(new GanttSlice(pcb.getProcessId(), startTime, endTime, burst, 0));
-      pcb.setWaitingTime(startTime); // 0
-      currentTime = endTime; // 13
+      pcb.setWaitingTime(startTime);
+      currentTime = endTime;
+
+      // 3. Process is finished, release its memory to allow JobLoader to load P5
+      jobLoader.releaseMemory(pcb.getMemoryRequired());
+
+      try {
+        Thread.sleep(50); // brief pause to allow JobLoader to load new jobs if possible
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+
+      // Fetch immediately to ensure newly loaded jobs get properly aged
+      while (!readyQueue.isEmpty()) {
+        waiting.add(readyQueue.poll());
+      }
 
       if (!waiting.isEmpty()) {
         int agingRounds = burst / PRIORITY_AGING_INTERVAL_MS;
@@ -179,8 +272,8 @@ public class App {
         continue;
       }
       if (priorityCompare == 0) {
-        int burstCompare = Integer.compare(pcb.getCpuBurstTime(), selected.getCpuBurstTime());
-        if (burstCompare < 0 || (burstCompare == 0 && pcb.getProcessId() < selected.getProcessId())) {
+        int arrivalCompare = Integer.compare(pcb.getArrivalOrder(), selected.getArrivalOrder());
+        if (arrivalCompare < 0) {
           selected = pcb;
         }
       }

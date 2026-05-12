@@ -10,6 +10,8 @@ public class PCB {
   private State state;
   private int cpuBurstTime;
   private int priority;
+  private final int arrivalOrder;
+  private static int arrivalCounter = 0;
   private int memoryRequired;
   private int waitingTime;
   private int turnaroundTime;
@@ -19,6 +21,7 @@ public class PCB {
     this.processId = processId;
     this.cpuBurstTime = cpuBurstTime;
     this.priority = priority;
+    this.arrivalOrder = arrivalCounter++;
     this.memoryRequired = memoryRequired;
 
     this.state = State.NEW;
@@ -57,6 +60,10 @@ public class PCB {
 
   public void setPriority(int priority) {
     this.priority = priority;
+  }
+
+  public int getArrivalOrder() {
+    return arrivalOrder;
   }
 
   public int getMemoryRequired() {
